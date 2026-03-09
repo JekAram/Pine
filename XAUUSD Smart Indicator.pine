@@ -1,0 +1,401 @@
+//@version=5
+indicator("XAUUSD Smart Decision [No Repaint]", shorttitle="XAU·SD", overlay=true, max_lines_count=100, max_labels_count=100, max_boxes_count=50)
+
+// ═══════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════
+grp1 = "⚙️ Signal Settings"
+sensitivity     = input.string("Balanced", "Signal Sensitivity", options=["Conservative", "Balanced", "Aggressive"], group=grp1)
+grp2 = "📊 Display Settings"
+show_tpsl       = input.bool(true,  "Show TP / SL Lines",    group=grp2)
+show_dashboard  = input.bool(true,  "Show Dashboard Panel",  group=grp2)
+show_zones      = input.bool(true,  "Show Key Zones",        group=grp2)
+show_ema_bg     = input.bool(true,  "Show EMA Background",   group=grp2)
+show_bos        = input.bool(true,  "Show BOS / CHoCH / MSS", group=grp2)
+grp3 = "🔔 Alert Settings"
+alert_signal    = input.bool(true,  "Alert on Signal",       group=grp3)
+
+// ═══════════════════════════════════════════════════════
+// AUTO TIMEFRAME ENGINE
+// ═══════════════════════════════════════════════════════
+tf_minutes = timeframe.in_seconds() / 60
+
+swing_len = tf_minutes <= 1   ? 3  :
+            tf_minutes <= 5   ? 5  :
+            tf_minutes <= 15  ? 8  :
+            tf_minutes <= 60  ? 10 :
+            tf_minutes <= 240 ? 13 : 16
+
+sens_mult = sensitivity == "Conservative" ? 1.5 :
+            sensitivity == "Aggressive"   ? 0.7 : 1.0
+
+tf_mode = tf_minutes <= 1   ? "SCALP"  :
+          tf_minutes <= 15  ? "ENTRY"  :
+          tf_minutes <= 60  ? "SWING"  : "BIAS"
+
+htf_tf  = tf_minutes <= 5   ? "15"  :
+          tf_minutes <= 15  ? "60"  :
+          tf_minutes <= 60  ? "240" : "D"
+
+zone_lookback_minor = 50
+zone_lookback_major = 200
+
+// ═══════════════════════════════════════════════════════
+// EMA
+// ═══════════════════════════════════════════════════════
+ema21  = ta.ema(close, 21)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+ema_bull = close > ema21 and ema21 > ema50 and ema50 > ema200
+ema_bear = close < ema21 and ema21 < ema50 and ema50 < ema200
+
+// EMA Background (very subtle)
+bg_col = show_ema_bg ? (ema_bull ? color.new(color.green, 94) : ema_bear ? color.new(color.red, 94) : na) : na
+bgcolor(bg_col)
+
+// ═══════════════════════════════════════════════════════
+// SWING POINT DETECTION (No Repaint — confirmed bars only)
+// ═══════════════════════════════════════════════════════
+swingH(len) =>
+    ta.pivothigh(high, len, len)
+
+swingL(len) =>
+    ta.pivotlow(low, len, len)
+
+ph = swingH(swing_len)
+pl = swingL(swing_len)
+
+var float last_ph  = na
+var float last_pl  = na
+var float prev_ph  = na
+var float prev_pl  = na
+
+if not na(ph)
+    prev_ph := last_ph
+    last_ph := ph
+
+if not na(pl)
+    prev_pl := last_pl
+    last_pl := pl
+
+// ═══════════════════════════════════════════════════════
+// MARKET STRUCTURE — BOS / CHoCH / MSS
+// ═══════════════════════════════════════════════════════
+var int   structure_bias = 0  // 1=Bull, -1=Bear, 0=Neutral
+var bool  choch_active   = false
+var float choch_level    = na
+var line  bos_line       = na
+var label bos_lbl        = na
+
+// Bearish BOS: close breaks below last swing low
+bearish_bos = not na(last_pl) and close < last_pl and close[1] >= last_pl
+// Bullish BOS: close breaks above last swing high
+bullish_bos = not na(last_ph) and close > last_ph and close[1] <= last_ph
+
+// CHoCH in downtrend: close breaks above last swing high despite bearish bias
+choch_bull = structure_bias == -1 and bullish_bos
+// CHoCH in uptrend: close breaks below last swing low despite bullish bias
+choch_bear = structure_bias ==  1 and bearish_bos
+
+// MSS: CHoCH confirmed + new structure forming
+var bool mss_bull = false
+var bool mss_bear = false
+mss_bull := choch_bull and not na(prev_pl) and low > prev_pl
+mss_bear := choch_bear and not na(prev_ph) and high < prev_ph
+
+// Update bias
+if bearish_bos and not choch_bull
+    structure_bias := -1
+    choch_active   := false
+if bullish_bos and not choch_bear
+    structure_bias := 1
+    choch_active   := false
+if choch_bull or choch_bear
+    choch_active := true
+
+// Draw BOS line (only last 3)
+if show_bos
+    if bearish_bos and not choch_bull
+        bos_line := line.new(bar_index[1], last_pl, bar_index, last_pl,
+             color=color.new(color.blue, 40), style=line.style_solid, width=1)
+        bos_lbl  := label.new(bar_index, last_pl, "BOS",
+             color=color.new(color.blue, 80), textcolor=color.new(color.white, 0),
+             style=label.style_label_left, size=size.tiny)
+
+    if bullish_bos and not choch_bear
+        bos_line := line.new(bar_index[1], last_ph, bar_index, last_ph,
+             color=color.new(color.blue, 40), style=line.style_solid, width=1)
+        bos_lbl  := label.new(bar_index, last_ph, "BOS",
+             color=color.new(color.blue, 80), textcolor=color.new(color.white, 0),
+             style=label.style_label_left, size=size.tiny)
+
+    if choch_bull or choch_bear
+        choch_col = color.new(color.yellow, 40)
+        line.new(bar_index[1], close[1], bar_index, close,
+             color=choch_col, style=line.style_dashed, width=1)
+        label.new(bar_index, close, "CHoCH",
+             color=color.new(color.yellow, 80), textcolor=color.new(color.black, 0),
+             style=label.style_label_left, size=size.tiny)
+
+    if mss_bull or mss_bear
+        mss_col = mss_bull ? color.new(color.green, 20) : color.new(color.red, 20)
+        line.new(bar_index[1], close[1], bar_index, close,
+             color=mss_col, style=line.style_solid, width=2)
+        label.new(bar_index, close, "MSS",
+             color=mss_col, textcolor=color.new(color.white, 0),
+             style=label.style_label_left, size=size.small)
+
+// ═══════════════════════════════════════════════════════
+// KEY ZONE DETECTION (Minor + Major)
+// ═══════════════════════════════════════════════════════
+// Find highest/lowest swing in lookback
+zone_res_minor = ta.highest(high, zone_lookback_minor)
+zone_sup_minor = ta.lowest(low,  zone_lookback_minor)
+zone_res_major = ta.highest(high, zone_lookback_major)
+zone_sup_major = ta.lowest(low,  zone_lookback_major)
+
+zone_height = ta.atr(14) * 0.5
+
+var box box_res_min = na
+var box box_sup_min = na
+var box box_res_maj = na
+var box box_sup_maj = na
+
+if show_zones and barstate.islast
+    // Minor Resistance
+    box.delete(box_res_min)
+    box_res_min := box.new(bar_index - zone_lookback_minor, zone_res_minor + zone_height,
+                           bar_index + 10,                  zone_res_minor - zone_height,
+                           border_color=color.new(color.red, 60),
+                           bgcolor=color.new(color.red, 88))
+    label.new(bar_index + 11, zone_res_minor, "Resistance",
+              color=color.new(color.red, 90), textcolor=color.new(color.red, 20),
+              style=label.style_label_left, size=size.tiny)
+
+    // Minor Support
+    box.delete(box_sup_min)
+    box_sup_min := box.new(bar_index - zone_lookback_minor, zone_sup_minor + zone_height,
+                           bar_index + 10,                  zone_sup_minor - zone_height,
+                           border_color=color.new(color.green, 60),
+                           bgcolor=color.new(color.green, 88))
+    label.new(bar_index + 11, zone_sup_minor, "Support",
+              color=color.new(color.green, 90), textcolor=color.new(color.green, 20),
+              style=label.style_label_left, size=size.tiny)
+
+    // Major Resistance (darker)
+    if zone_res_major != zone_res_minor
+        box.delete(box_res_maj)
+        box_res_maj := box.new(bar_index - zone_lookback_major, zone_res_major + zone_height,
+                               bar_index + 10,                  zone_res_major - zone_height,
+                               border_color=color.new(color.red, 30),
+                               bgcolor=color.new(color.red, 80))
+        label.new(bar_index + 11, zone_res_major, "Resistance",
+                  color=color.new(color.red, 80), textcolor=color.new(color.red, 10),
+                  style=label.style_label_left, size=size.tiny)
+
+    // Major Support (darker)
+    if zone_sup_major != zone_sup_minor
+        box.delete(box_sup_maj)
+        box_sup_maj := box.new(bar_index - zone_lookback_major, zone_sup_major + zone_height,
+                               bar_index + 10,                  zone_sup_major - zone_height,
+                               border_color=color.new(color.green, 30),
+                               bgcolor=color.new(color.green, 80))
+        label.new(bar_index + 11, zone_sup_major, "Support",
+                  color=color.new(color.green, 80), textcolor=color.new(color.green, 10),
+                  style=label.style_label_left, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════
+// HTF BIAS
+// ═══════════════════════════════════════════════════════
+htf_close  = request.security(syminfo.tickerid, htf_tf, close,  lookahead=barmerge.lookahead_off)
+htf_ema21  = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 21),  lookahead=barmerge.lookahead_off)
+htf_ema50  = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50),  lookahead=barmerge.lookahead_off)
+htf_ema200 = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 200), lookahead=barmerge.lookahead_off)
+
+htf_bull = htf_close > htf_ema21 and htf_ema21 > htf_ema50
+htf_bear = htf_close < htf_ema21 and htf_ema21 < htf_ema50
+htf_bias_str = htf_bull ? "B▲" : htf_bear ? "S▼" : "─"
+htf_bias_col = htf_bull ? color.new(color.green, 0) : htf_bear ? color.new(color.red, 0) : color.gray
+
+// ═══════════════════════════════════════════════════════
+// CANDLE PATTERN CONFIRM (No RSI/Volume — Price Action only)
+// ═══════════════════════════════════════════════════════
+body      = math.abs(close - open)
+upper_wick = high - math.max(close, open)
+lower_wick = math.min(close, open) - low
+candle_range = high - low
+
+// Bullish Pin Bar
+bull_pin = lower_wick > body * 2.0 * sens_mult and lower_wick > upper_wick * 2.0 and close > open
+
+// Bearish Pin Bar
+bear_pin = upper_wick > body * 2.0 * sens_mult and upper_wick > lower_wick * 2.0 and close < open
+
+// Bullish Engulfing
+bull_eng = close > open and close[1] < open[1] and
+           close > open[1] and open < close[1] and
+           body > body[1] * 1.2 * sens_mult
+
+// Bearish Engulfing
+bear_eng = close < open and close[1] > open[1] and
+           close < open[1] and open > close[1] and
+           body > body[1] * 1.2 * sens_mult
+
+bull_pattern = bull_pin or bull_eng
+bear_pattern = bear_pin or bear_eng
+
+// ═══════════════════════════════════════════════════════
+// ZONE PROXIMITY CHECK
+// ═══════════════════════════════════════════════════════
+atr14 = ta.atr(14)
+near_support    = math.abs(low  - zone_sup_minor) < atr14 * 1.5
+near_resistance = math.abs(high - zone_res_minor) < atr14 * 1.5
+
+// ═══════════════════════════════════════════════════════
+// SIGNAL GENERATION (3-condition filter, Candle Close only)
+// ═══════════════════════════════════════════════════════
+// BUY: Structure Bull + Near Support + Bull Pattern + HTF not bearish
+buy_signal = structure_bias >= 0 and
+             near_support       and
+             bull_pattern       and
+             not htf_bear       and
+             barstate.isconfirmed  // No Repaint — confirmed close only
+
+// SELL: Structure Bear + Near Resistance + Bear Pattern + HTF not bullish
+sell_signal = structure_bias <= 0 and
+              near_resistance    and
+              bear_pattern       and
+              not htf_bull       and
+              barstate.isconfirmed
+
+// High Confidence: HTF aligned perfectly
+buy_hc  = buy_signal  and htf_bull
+sell_hc = sell_signal and htf_bear
+
+// TP / SL Calculation
+sl_buy  = low  - atr14 * 1.2
+tp1_buy = close + atr14 * 2.0
+tp2_buy = close + atr14 * 3.5
+
+sl_sell  = high + atr14 * 1.2
+tp1_sell = close - atr14 * 2.0
+tp2_sell = close - atr14 * 3.5
+
+// ═══════════════════════════════════════════════════════
+// PLOT SIGNALS
+// ═══════════════════════════════════════════════════════
+plotshape(buy_signal and not buy_hc,  title="Buy",    location=location.belowbar,
+          style=shape.triangleup,   color=color.new(color.green, 20), size=size.small)
+plotshape(sell_signal and not sell_hc, title="Sell",  location=location.abovebar,
+          style=shape.triangledown, color=color.new(color.red, 20),   size=size.small)
+plotshape(buy_hc,  title="Buy HC",  location=location.belowbar,
+          style=shape.star, color=color.new(color.lime, 0), size=size.normal)
+plotshape(sell_hc, title="Sell HC", location=location.abovebar,
+          style=shape.star, color=color.new(color.red, 0),  size=size.normal)
+
+// TP / SL Lines on signal bar
+var line sl_line   = na
+var line tp1_line  = na
+var line tp2_line  = na
+
+if show_tpsl and (buy_signal or sell_signal) and barstate.isconfirmed
+    line.delete(sl_line)
+    line.delete(tp1_line)
+    line.delete(tp2_line)
+
+    _sl  = buy_signal ? sl_buy   : sl_sell
+    _tp1 = buy_signal ? tp1_buy  : tp1_sell
+    _tp2 = buy_signal ? tp2_buy  : tp2_sell
+    _col = buy_signal ? color.green : color.red
+
+    sl_line  := line.new(bar_index, _sl,  bar_index + 30, _sl,
+                 color=color.new(color.red, 30),   style=line.style_dashed, width=1)
+    tp1_line := line.new(bar_index, _tp1, bar_index + 30, _tp1,
+                 color=color.new(_col, 30), style=line.style_dashed, width=1)
+    tp2_line := line.new(bar_index, _tp2, bar_index + 30, _tp2,
+                 color=color.new(_col, 50), style=line.style_dashed, width=1)
+
+    label.new(bar_index + 31, _sl,  "SL",  size=size.tiny,
+              color=color.new(color.red, 70), textcolor=color.white, style=label.style_label_left)
+    label.new(bar_index + 31, _tp1, "TP1", size=size.tiny,
+              color=color.new(_col, 70),  textcolor=color.white, style=label.style_label_left)
+    label.new(bar_index + 31, _tp2, "TP2", size=size.tiny,
+              color=color.new(_col, 80),  textcolor=color.white, style=label.style_label_left)
+
+// ═══════════════════════════════════════════════════════
+// DASHBOARD PANEL
+// ═══════════════════════════════════════════════════════
+if show_dashboard and barstate.islast
+    var table dash = table.new(position.top_right, 2, 9,
+                     bgcolor=color.new(color.black, 75),
+                     border_color=color.new(color.gray, 60),
+                     border_width=1, frame_color=color.new(color.gray, 40), frame_width=1)
+
+    // Header
+    table.cell(dash, 0, 0, "XAUUSD · " + tf_mode, text_color=color.white,
+               text_size=size.small, bgcolor=color.new(color.navy, 50), text_halign=text.align_center)
+    table.cell(dash, 1, 0, timeframe.period + "M", text_color=color.silver,
+               text_size=size.tiny, bgcolor=color.new(color.navy, 50), text_halign=text.align_center)
+
+    // HTF Bias
+    table.cell(dash, 0, 1, "HTF Bias", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 1, htf_bias_str, text_color=htf_bias_col, text_size=size.small)
+
+    // Structure
+    struct_str = structure_bias == 1 ? "Bullish" : structure_bias == -1 ? "Bearish" : "Neutral"
+    struct_col = structure_bias == 1 ? color.green : structure_bias == -1 ? color.red : color.gray
+    table.cell(dash, 0, 2, "Structure", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 2, struct_str, text_color=struct_col, text_size=size.small)
+
+    // CHoCH Warning
+    choch_str = choch_active ? "⚠ CHoCH" : "─"
+    choch_col = choch_active ? color.yellow : color.gray
+    table.cell(dash, 0, 3, "Alert", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 3, choch_str, text_color=choch_col, text_size=size.tiny)
+
+    // Signal
+    sig_str = buy_hc  ? "BUY ★"  :
+              sell_hc ? "SELL ★" :
+              buy_signal  ? "BUY"  :
+              sell_signal ? "SELL" : "WAIT"
+    sig_col = (buy_signal or buy_hc) ? color.lime :
+              (sell_signal or sell_hc) ? color.red : color.gray
+    table.cell(dash, 0, 4, "Signal", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 4, sig_str, text_color=sig_col, text_size=size.small)
+
+    // Zone
+    zone_str = near_support ? "Support Zone" : near_resistance ? "Resist Zone" : "─"
+    zone_col = near_support ? color.green : near_resistance ? color.red : color.gray
+    table.cell(dash, 0, 5, "Zone", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 5, zone_str, text_color=zone_col, text_size=size.tiny)
+
+    // SL / TP (show last signal values)
+    _show_buy = buy_signal or buy_hc
+    _show_sel = sell_signal or sell_hc
+    _sl_val  = _show_buy ? str.tostring(math.round(sl_buy,  2)) :
+               _show_sel ? str.tostring(math.round(sl_sell, 2)) : "─"
+    _tp1_val = _show_buy ? str.tostring(math.round(tp1_buy,  2)) :
+               _show_sel ? str.tostring(math.round(tp1_sell, 2)) : "─"
+    _tp2_val = _show_buy ? str.tostring(math.round(tp2_buy,  2)) :
+               _show_sel ? str.tostring(math.round(tp2_sell, 2)) : "─"
+
+    table.cell(dash, 0, 6, "SL",  text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 6, _sl_val,  text_color=color.red,   text_size=size.tiny)
+    table.cell(dash, 0, 7, "TP1", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 7, _tp1_val, text_color=color.green, text_size=size.tiny)
+    table.cell(dash, 0, 8, "TP2", text_color=color.silver, text_size=size.tiny)
+    table.cell(dash, 1, 8, _tp2_val, text_color=color.new(color.green, 30), text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════
+if alert_signal
+    if buy_hc
+        alert("⭐ XAUUSD HIGH CONFIDENCE BUY | " + timeframe.period + "M | Close: " + str.tostring(close), alert.freq_once_per_bar_close)
+    else if buy_signal
+        alert("🟢 XAUUSD BUY Signal | " + timeframe.period + "M | Close: " + str.tostring(close), alert.freq_once_per_bar_close)
+    if sell_hc
+        alert("⭐ XAUUSD HIGH CONFIDENCE SELL | " + timeframe.period + "M | Close: " + str.tostring(close), alert.freq_once_per_bar_close)
+    else if sell_signal
+        alert("🔴 XAUUSD SELL Signal | " + timeframe.period + "M | Close: " + str.tostring(close), alert.freq_once_per_bar_close)
