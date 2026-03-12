@@ -1,0 +1,554 @@
+//@version=6
+indicator("XAUUSD SMC Pro", shorttitle="XAU·SMC", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ═══════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════
+grp1 = "📐 Fibonacci"
+fib_len  = input.int(10, "Swing Length", minval=3, maxval=50, group=grp1)
+show_fib = input.bool(true, "Show Fibonacci", group=grp1)
+
+grp2 = "📊 FRVP"
+vp_bars    = input.int(50,  "Lookback Bars", minval=10, maxval=300, group=grp2)
+vp_buckets = input.int(20,  "Buckets",       minval=10, maxval=40,  group=grp2)
+show_vp    = input.bool(true, "Show FRVP",   group=grp2)
+
+grp3 = "🟦 SMC"
+show_ob  = input.bool(true, "Show Order Blocks", group=grp3)
+show_fvg = input.bool(true, "Show FVG",          group=grp3)
+ob_max   = input.int(3, "Max OB", minval=1, maxval=5, group=grp3)
+fvg_max  = input.int(3, "Max FVG", minval=1, maxval=5, group=grp3)
+
+grp4 = "🎯 Entry Zone"
+show_entry = input.bool(true, "Show Entry Zone", group=grp4)
+
+grp5 = "🌐 HTF Bias"
+htf_tf = input.timeframe("240", "HTF Timeframe", group=grp5)
+
+grp6 = "📱 Dashboard"
+show_dash = input.bool(true, "Show Dashboard", group=grp6)
+
+// ═══════════════════════════════════════════════════════════
+// CORE
+// ═══════════════════════════════════════════════════════════
+float atr14 = ta.atr(14)
+
+// ═══════════════════════════════════════════════════════════
+// HTF BIAS
+// ═══════════════════════════════════════════════════════════
+float htf_ema20 = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 20), lookahead=barmerge.lookahead_off)
+float htf_ema50 = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+float htf_close = request.security(syminfo.tickerid, htf_tf, close,             lookahead=barmerge.lookahead_off)
+bool htf_bull = htf_close > htf_ema20 and htf_ema20 > htf_ema50
+bool htf_bear = htf_close < htf_ema20 and htf_ema20 < htf_ema50
+
+// ═══════════════════════════════════════════════════════════
+// MACD — Fast 5 / Slow 13 / Signal 4 (plotted in overlay=false pane via plot)
+// ═══════════════════════════════════════════════════════════
+float macd_fast  = ta.ema(close, 5)
+float macd_slow  = ta.ema(close, 13)
+float macd_line  = macd_fast - macd_slow
+float macd_sig   = ta.ema(macd_line, 4)
+float macd_hist  = macd_line - macd_sig
+bool  macd_bull  = macd_line > macd_sig
+bool  macd_bear  = macd_line < macd_sig
+
+// ═══════════════════════════════════════════════════════════
+// SWING POINTS
+// ═══════════════════════════════════════════════════════════
+float swing_h = ta.pivothigh(high, fib_len, fib_len)
+float swing_l = ta.pivotlow(low,   fib_len, fib_len)
+
+var float last_sh = na
+var float last_sl = na
+var int   sh_bar  = na
+var int   sl_bar  = na
+
+if not na(swing_h)
+    last_sh := swing_h
+    sh_bar  := bar_index[fib_len]
+
+if not na(swing_l)
+    last_sl := swing_l
+    sl_bar  := bar_index[fib_len]
+
+// ═══════════════════════════════════════════════════════════
+// MARKET STRUCTURE
+// ═══════════════════════════════════════════════════════════
+var bool ms_bull = false
+var bool ms_bear = false
+
+bool broke_hi = not na(last_sh) and close > last_sh and barstate.isconfirmed
+bool broke_lo = not na(last_sl) and close < last_sl and barstate.isconfirmed
+
+bool bos_bull   = broke_hi and ms_bull
+bool bos_bear   = broke_lo and ms_bear
+bool choch_bull = broke_hi and ms_bear
+bool choch_bear = broke_lo and ms_bull
+
+if choch_bull or bos_bull
+    ms_bull := true
+    ms_bear := false
+if choch_bear or bos_bear
+    ms_bear := true
+    ms_bull := false
+
+if barstate.isconfirmed
+    if bos_bull
+        line.new(bar_index[1], last_sh, bar_index + 3, last_sh, color=color.new(color.lime, 20), width=1)
+        label.new(bar_index, last_sh + atr14 * 0.5, "BOS", color=color.new(color.lime, 30), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if bos_bear
+        line.new(bar_index[1], last_sl, bar_index + 3, last_sl, color=color.new(color.red, 20), width=1)
+        label.new(bar_index, last_sl - atr14 * 0.5, "BOS", color=color.new(color.red, 30), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if choch_bull
+        line.new(bar_index[1], last_sh, bar_index + 3, last_sh, color=color.new(color.aqua, 10), style=line.style_dashed, width=2)
+        label.new(bar_index, last_sh + atr14 * 0.5, "CHoCH", color=color.new(color.aqua, 20), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if choch_bear
+        line.new(bar_index[1], last_sl, bar_index + 3, last_sl, color=color.new(color.orange, 10), style=line.style_dashed, width=2)
+        label.new(bar_index, last_sl - atr14 * 0.5, "CHoCH", color=color.new(color.orange, 20), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════
+// FIBONACCI — 6 Levels: 0% / 50% / 61.8% / 70.5% / 78.6% / 100%
+// ═══════════════════════════════════════════════════════════
+f_lvl(from, to, pct) => from + (to - from) * pct
+
+var line  fl0   = na
+var line  fl50  = na
+var line  fl618 = na
+var line  fl705 = na
+var line  fl786 = na
+var line  fl100 = na
+var label lbl0   = na
+var label lbl50  = na
+var label lbl618 = na
+var label lbl705 = na
+var label lbl786 = na
+var label lbl100 = na
+
+bool bias_bull = not na(last_sh) and not na(last_sl) and sh_bar > sl_bar
+bool bias_bear = not na(last_sh) and not na(last_sl) and sl_bar > sh_bar
+
+float fib_from = bias_bull ? last_sl : last_sh
+float fib_to   = bias_bull ? last_sh : last_sl
+
+if show_fib and barstate.islast and not na(fib_from)
+    line.delete(fl0)
+    line.delete(fl50)
+    line.delete(fl618)
+    line.delete(fl705)
+    line.delete(fl786)
+    line.delete(fl100)
+    label.delete(lbl0)
+    label.delete(lbl50)
+    label.delete(lbl618)
+    label.delete(lbl705)
+    label.delete(lbl786)
+    label.delete(lbl100)
+
+    float p0   = f_lvl(fib_from, fib_to, 0.0)
+    float p50  = f_lvl(fib_from, fib_to, 0.5)
+    float p618 = f_lvl(fib_from, fib_to, 0.618)
+    float p705 = f_lvl(fib_from, fib_to, 0.705)
+    float p786 = f_lvl(fib_from, fib_to, 0.786)
+    float p100 = f_lvl(fib_from, fib_to, 1.0)
+
+    int fx1 = bias_bull ? sl_bar : sh_bar
+    int fx2 = bar_index + 6
+
+    // Lines — Fib labels on LEFT to avoid FRVP histogram
+    fl0   := line.new(fx1, p0,   fx2, p0,   color=color.new(color.gray,   40), style=line.style_dashed, width=1)
+    fl50  := line.new(fx1, p50,  fx2, p50,  color=color.new(color.gray,   30), style=line.style_dashed, width=1)
+    fl618 := line.new(fx1, p618, fx2, p618, color=color.new(color.lime,   15), style=line.style_solid,  width=2)
+    fl705 := line.new(fx1, p705, fx2, p705, color=color.new(color.lime,   25), style=line.style_dashed, width=1)
+    fl786 := line.new(fx1, p786, fx2, p786, color=color.new(color.orange, 20), style=line.style_solid,  width=2)
+    fl100 := line.new(fx1, p100, fx2, p100, color=color.new(color.gray,   40), style=line.style_dashed, width=1)
+
+    int lx = fx1 - 2
+    lbl0   := label.new(lx, p0,   "0%  "   + str.tostring(math.round(p0,   1)), color=color.new(color.gray,   65), textcolor=color.silver, style=label.style_label_right, size=size.tiny)
+    lbl50  := label.new(lx, p50,  "50%  "  + str.tostring(math.round(p50,  1)), color=color.new(color.gray,   55), textcolor=color.silver, style=label.style_label_right, size=size.tiny)
+    lbl618 := label.new(lx, p618, "61.8%  "+ str.tostring(math.round(p618, 1)), color=color.new(color.lime,   45), textcolor=color.lime,   style=label.style_label_right, size=size.tiny)
+    lbl705 := label.new(lx, p705, "70.5%  "+ str.tostring(math.round(p705, 1)), color=color.new(color.lime,   50), textcolor=color.lime,   style=label.style_label_right, size=size.tiny)
+    lbl786 := label.new(lx, p786, "78.6%  "+ str.tostring(math.round(p786, 1)), color=color.new(color.orange, 45), textcolor=color.orange, style=label.style_label_right, size=size.tiny)
+    lbl100 := label.new(lx, p100, "100%  " + str.tostring(math.round(p100, 1)), color=color.new(color.gray,   65), textcolor=color.silver, style=label.style_label_right, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════
+// FRVP
+// ═══════════════════════════════════════════════════════════
+float vp_hi   = ta.highest(high, vp_bars)
+float vp_lo   = ta.lowest(low,   vp_bars)
+float vp_step = (vp_hi - vp_lo) / vp_buckets
+
+var float[] vb  = array.new_float(0)
+var float[] vbe = array.new_float(0)
+var float   poc = na
+var float   vah = na
+var float   val = na
+var box[]   vpb = array.new_box(0)
+var line    pocl = na
+var line    vahl = na
+var line    vall = na
+
+if show_vp and barstate.islast
+    int vc = array.size(vpb)
+    int vi = 0
+    while vi < vc
+        box.delete(array.get(vpb, vi))
+        vi += 1
+    array.clear(vpb)
+    line.delete(pocl)
+    line.delete(vahl)
+    line.delete(vall)
+    array.clear(vb)
+    array.clear(vbe)
+    int vbi = 0
+    while vbi < vp_buckets
+        array.push(vb,  0.0)
+        array.push(vbe, 0.0)
+        vbi += 1
+    int vn = 0
+    while vn < vp_bars
+        float bm  = (high[vn] + low[vn]) / 2.0
+        int   bkt = int(math.floor((bm - vp_lo) / vp_step))
+        bkt := math.max(0, math.min(vp_buckets - 1, bkt))
+        float bvol = volume[vn] / 2.0
+        if close[vn] >= open[vn]
+            array.set(vb,  bkt, array.get(vb,  bkt) + bvol)
+        else
+            array.set(vbe, bkt, array.get(vbe, bkt) + bvol)
+        vn += 1
+    float mxv = 0.0
+    int   pi  = 0
+    int   vk  = 0
+    while vk < vp_buckets
+        float tv = array.get(vb, vk) + array.get(vbe, vk)
+        if tv > mxv
+            mxv := tv
+            pi  := vk
+        vk += 1
+    float tvol = 0.0
+    int vkk = 0
+    while vkk < vp_buckets
+        tvol += array.get(vb, vkk) + array.get(vbe, vkk)
+        vkk += 1
+    float vatgt = tvol * 0.7
+    float vaacc = array.get(vb, pi) + array.get(vbe, pi)
+    int   valo  = pi
+    int   vahi  = pi
+    while vaacc < vatgt
+        float ahi = vahi + 1 < vp_buckets ? array.get(vb, vahi + 1) + array.get(vbe, vahi + 1) : 0.0
+        float alo = valo - 1 >= 0 ? array.get(vb, valo - 1) + array.get(vbe, valo - 1) : 0.0
+        if ahi >= alo and vahi + 1 < vp_buckets
+            vahi += 1
+            vaacc += ahi
+        else if valo - 1 >= 0
+            valo -= 1
+            vaacc += alo
+        else
+            break
+    poc := vp_lo + (pi + 0.5) * vp_step
+    vah := vp_lo + (vahi + 1) * vp_step
+    val := vp_lo + valo * vp_step
+    float mxbv = 0.0
+    int   mvi  = 0
+    while mvi < vp_buckets
+        float tv2 = array.get(vb, mvi) + array.get(vbe, mvi)
+        if tv2 > mxbv
+            mxbv := tv2
+        mvi += 1
+    int bw = 10
+    int vp = 0
+    while vp < vp_buckets
+        float bv2  = array.get(vb, vp) + array.get(vbe, vp)
+        float bf   = mxbv > 0.0 ? bv2 / mxbv : 0.0
+        int   bl   = math.max(1, int(math.round(bf * bw)))
+        float blo2 = vp_lo + vp * vp_step
+        float bhi2 = blo2 + vp_step * 0.85
+        bool  inva = vp >= valo and vp <= vahi
+        bool  ispc = vp == pi
+        color bc   = ispc ? color.new(color.orange, 25) : inva ? color.new(color.teal, 55) : color.new(color.gray, 78)
+        box bx = box.new(bar_index + 1, bhi2, bar_index + 1 + bl, blo2, border_color=color.new(color.gray, 90), bgcolor=bc)
+        array.push(vpb, bx)
+        vp += 1
+    pocl := line.new(bar_index - vp_bars, poc, bar_index + bw + 2, poc, color=color.new(color.orange, 0), width=2)
+    vahl := line.new(bar_index - vp_bars, vah, bar_index + bw + 2, vah, color=color.new(color.teal, 20), style=line.style_dashed, width=1)
+    vall := line.new(bar_index - vp_bars, val, bar_index + bw + 2, val, color=color.new(color.teal, 20), style=line.style_dashed, width=1)
+    label.new(bar_index + bw + 3, poc, "POC " + str.tostring(math.round(poc, 1)), color=color.new(color.orange, 50), textcolor=color.orange, style=label.style_label_left, size=size.tiny)
+    label.new(bar_index + bw + 3, vah, "VAH " + str.tostring(math.round(vah, 1)), color=color.new(color.teal, 60),   textcolor=color.teal,   style=label.style_label_left, size=size.tiny)
+    label.new(bar_index + bw + 3, val, "VAL " + str.tostring(math.round(val, 1)), color=color.new(color.teal, 60),   textcolor=color.teal,   style=label.style_label_left, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════
+// ORDER BLOCK
+// ═══════════════════════════════════════════════════════════
+float ob_thr = atr14 * 1.5
+bool s_up    = (close - open) >= ob_thr and close[1] > open[1] and close[2] > open[2]
+bool s_dn    = (open - close) >= ob_thr and close[1] < open[1] and close[2] < open[2]
+bool ob_bull = s_up and close[3] < open[3]
+bool ob_bear = s_dn and close[3] > open[3]
+
+var box[]   ob_bx  = array.new_box(0)
+var float[] ob_hi  = array.new_float(0)
+var float[] ob_lo  = array.new_float(0)
+var bool[]  ob_bl  = array.new_bool(0)
+var float[] ob_mid = array.new_float(0)
+
+if show_ob
+    if ob_bull
+        float h = math.max(open[3], close[3])
+        float l = math.min(open[3], close[3])
+        box nb = box.new(bar_index - 3, h, bar_index + 100, l, border_color=color.new(color.teal, 0), bgcolor=color.new(color.teal, 78), border_width=2)
+        label.new(bar_index - 3, h + atr14 * 0.3, "Bull OB", color=color.new(color.teal, 25), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+        array.unshift(ob_bx, nb)
+        array.unshift(ob_hi, h)
+        array.unshift(ob_lo, l)
+        array.unshift(ob_bl, true)
+        array.unshift(ob_mid, (h + l) / 2.0)
+    if ob_bear
+        float h = math.max(open[3], close[3])
+        float l = math.min(open[3], close[3])
+        box nb = box.new(bar_index - 3, h, bar_index + 100, l, border_color=color.new(color.red, 0), bgcolor=color.new(color.red, 78), border_width=2)
+        label.new(bar_index - 3, l - atr14 * 0.3, "Bear OB", color=color.new(color.red, 25), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+        array.unshift(ob_bx, nb)
+        array.unshift(ob_hi, h)
+        array.unshift(ob_lo, l)
+        array.unshift(ob_bl, false)
+        array.unshift(ob_mid, (h + l) / 2.0)
+
+if show_ob and array.size(ob_bx) > 0
+    int oi = 0
+    while oi < array.size(ob_bx)
+        bool  ib  = array.get(ob_bl, oi)
+        float mid = array.get(ob_mid, oi)
+        bool  mit = ib ? low <= mid : high >= mid
+        if mit
+            box.delete(array.get(ob_bx, oi))
+            array.remove(ob_bx, oi)
+            array.remove(ob_hi, oi)
+            array.remove(ob_lo, oi)
+            array.remove(ob_bl, oi)
+            array.remove(ob_mid, oi)
+        else
+            oi += 1
+
+while array.size(ob_bx) > ob_max
+    int last = array.size(ob_bx) - 1
+    box.delete(array.get(ob_bx, last))
+    array.pop(ob_bx)
+    array.pop(ob_hi)
+    array.pop(ob_lo)
+    array.pop(ob_bl)
+    array.pop(ob_mid)
+
+// ═══════════════════════════════════════════════════════════
+// FVG
+// ═══════════════════════════════════════════════════════════
+bool fvg_bull_c = low[0] > high[2] and close[1] > open[1]
+bool fvg_bear_c = high[0] < low[2] and close[1] < open[1]
+
+var box[]   fvg_bx = array.new_box(0)
+var float[] fvg_hi = array.new_float(0)
+var float[] fvg_lo = array.new_float(0)
+var bool[]  fvg_bl = array.new_bool(0)
+
+if show_fvg
+    if fvg_bull_c
+        float fh = low[0]
+        float fl = high[2]
+        if fh > fl
+            box nb = box.new(bar_index - 2, fh, bar_index + 60, fl, border_color=color.new(color.lime, 35), bgcolor=color.new(color.lime, 88), border_width=1)
+            label.new(bar_index - 2, (fh + fl) / 2.0, "FVG", color=color.new(color.lime, 45), textcolor=color.lime, style=label.style_label_right, size=size.tiny)
+            array.unshift(fvg_bx, nb)
+            array.unshift(fvg_hi, fh)
+            array.unshift(fvg_lo, fl)
+            array.unshift(fvg_bl, true)
+    if fvg_bear_c
+        float fh = low[2]
+        float fl = high[0]
+        if fh > fl
+            box nb = box.new(bar_index - 2, fh, bar_index + 60, fl, border_color=color.new(color.red, 35), bgcolor=color.new(color.red, 88), border_width=1)
+            label.new(bar_index - 2, (fh + fl) / 2.0, "FVG", color=color.new(color.red, 45), textcolor=color.red, style=label.style_label_right, size=size.tiny)
+            array.unshift(fvg_bx, nb)
+            array.unshift(fvg_hi, fh)
+            array.unshift(fvg_lo, fl)
+            array.unshift(fvg_bl, false)
+
+if show_fvg and array.size(fvg_bx) > 0
+    int fi = 0
+    while fi < array.size(fvg_bx)
+        bool  fb  = array.get(fvg_bl, fi)
+        float fh2 = array.get(fvg_hi, fi)
+        float fl2 = array.get(fvg_lo, fi)
+        bool  fil = fb ? low <= fl2 : high >= fh2
+        if fil
+            box.delete(array.get(fvg_bx, fi))
+            array.remove(fvg_bx, fi)
+            array.remove(fvg_hi, fi)
+            array.remove(fvg_lo, fi)
+            array.remove(fvg_bl, fi)
+        else
+            fi += 1
+
+while array.size(fvg_bx) > fvg_max
+    int fl = array.size(fvg_bx) - 1
+    box.delete(array.get(fvg_bx, fl))
+    array.pop(fvg_bx)
+    array.pop(fvg_hi)
+    array.pop(fvg_lo)
+    array.pop(fvg_bl)
+
+// ═══════════════════════════════════════════════════════════
+// PREMIUM & DISCOUNT
+// ═══════════════════════════════════════════════════════════
+float pd_hi  = not na(last_sh) and not na(last_sl) ? math.max(last_sh, last_sl) : na
+float pd_lo  = not na(last_sh) and not na(last_sl) ? math.min(last_sh, last_sl) : na
+float pd_mid = not na(pd_hi) ? (pd_hi + pd_lo) / 2.0 : na
+bool  in_disc = not na(pd_mid) and close < pd_mid
+bool  in_prem = not na(pd_mid) and close > pd_mid
+
+// ═══════════════════════════════════════════════════════════
+// ENTRY ZONE — SMC + Fib Confluence
+// Sell Zone: Bearish Structure + Premium + near 61.8–78.6 + Bear OB/FVG + MACD Bear
+// Buy  Zone: Bullish Structure + Discount + near 61.8–78.6 + Bull OB/FVG + MACD Bull
+// ═══════════════════════════════════════════════════════════
+float fib_618v = not na(fib_from) ? f_lvl(fib_from, fib_to, 0.618) : na
+float fib_786v = not na(fib_from) ? f_lvl(fib_from, fib_to, 0.786) : na
+
+bool near_golden = not na(fib_618v) and not na(fib_786v) and close >= math.min(fib_618v, fib_786v) - atr14 and close <= math.max(fib_618v, fib_786v) + atr14
+
+bool near_bull_ob = false
+bool near_bear_ob = false
+if array.size(ob_bx) > 0
+    int ni = 0
+    while ni < array.size(ob_bx)
+        bool  nib = array.get(ob_bl, ni)
+        float nih = array.get(ob_hi, ni)
+        float nil = array.get(ob_lo, ni)
+        if nib and close >= nil - atr14 and close <= nih + atr14
+            near_bull_ob := true
+        if not nib and close <= nih + atr14 and close >= nil - atr14
+            near_bear_ob := true
+        ni += 1
+
+bool near_bull_fvg = false
+bool near_bear_fvg = false
+if array.size(fvg_bx) > 0
+    int nf = 0
+    while nf < array.size(fvg_bx)
+        bool  nfb = array.get(fvg_bl, nf)
+        float nfh = array.get(fvg_hi, nf)
+        float nfl = array.get(fvg_lo, nf)
+        if nfb and close >= nfl - atr14 and close <= nfh + atr14
+            near_bull_fvg := true
+        if not nfb and close <= nfh + atr14 and close >= nfl - atr14
+            near_bear_fvg := true
+        nf += 1
+
+bool zone_sell = ms_bear and htf_bear and in_prem  and near_golden and (near_bear_ob or near_bear_fvg) and macd_bear
+bool zone_buy  = ms_bull and htf_bull and in_disc  and near_golden and (near_bull_ob or near_bull_fvg) and macd_bull
+
+var box   ez_box  = na
+var label ez_lbl  = na
+var label ez_sl   = na
+var label ez_tp1  = na
+var label ez_tp2  = na
+var line  ez_sl_l = na
+var line  ez_tp1l = na
+var line  ez_tp2l = na
+
+if show_entry and barstate.islast and (zone_sell or zone_buy)
+    box.delete(ez_box)
+    label.delete(ez_lbl)
+    label.delete(ez_sl)
+    label.delete(ez_tp1)
+    label.delete(ez_tp2)
+    line.delete(ez_sl_l)
+    line.delete(ez_tp1l)
+    line.delete(ez_tp2l)
+
+    float ez_hi = close + atr14 * 0.5
+    float ez_lo = close - atr14 * 0.5
+    color ez_c  = zone_sell ? color.red : color.lime
+    string ez_t = zone_sell ? "Sell" : "Buy"
+
+    // SL = above last swing high (sell) / below last swing low (buy)
+    float sl_p  = zone_sell ? (not na(last_sh) ? last_sh + atr14 * 0.2 : ez_hi + atr14 * 1.5) : (not na(last_sl) ? last_sl - atr14 * 0.2 : ez_lo - atr14 * 1.5)
+    float tp1_p = zone_sell ? ez_lo - atr14 * 2.0 : ez_hi + atr14 * 2.0
+    float tp2_p = zone_sell ? ez_lo - atr14 * 4.5 : ez_hi + atr14 * 4.5
+
+    float rr1 = math.abs(tp1_p - close) / math.abs(sl_p - close)
+
+    int ex1 = bar_index - 2
+    int ex2 = bar_index + 20
+
+    // Entry Zone Box
+    ez_box := box.new(ex1, ez_hi, ex2, ez_lo, border_color=color.new(ez_c, 0), bgcolor=color.new(ez_c, 65), border_width=2)
+
+    // tiny "Sell" / "Buy" label INSIDE the box
+    ez_lbl := label.new(bar_index, (ez_hi + ez_lo) / 2.0, ez_t + "  " + str.tostring(math.round(close, 1)) + "\nRR 1:" + str.tostring(math.round(rr1, 1)), color=color.new(ez_c, 20), textcolor=color.white, style=label.style_label_center, size=size.tiny)
+
+    // SL line + tiny text
+    ez_sl_l := line.new(ex1, sl_p, ex2, sl_p, color=color.new(color.red, 0), style=line.style_solid, width=2)
+    ez_sl   := label.new(ex2 + 1, sl_p, "SL " + str.tostring(math.round(sl_p, 1)), color=color.new(color.red, 20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+    // TP lines + tiny text
+    ez_tp1l := line.new(ex1, tp1_p, ex2, tp1_p, color=color.new(color.lime, 0), style=line.style_dashed, width=2)
+    ez_tp1  := label.new(ex2 + 1, tp1_p, "TP1 " + str.tostring(math.round(tp1_p, 1)), color=color.new(color.lime, 20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+    ez_tp2l := line.new(ex1, tp2_p, ex2, tp2_p, color=color.new(color.teal, 10), style=line.style_dashed, width=1)
+    ez_tp2  := label.new(ex2 + 1, tp2_p, "TP2 " + str.tostring(math.round(tp2_p, 1)), color=color.new(color.teal, 25), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════
+if show_dash and barstate.islast
+    var table d = table.new(position.bottom_left, 2, 8, bgcolor=color.new(color.black, 10), border_color=color.new(color.gray, 30), border_width=1, frame_color=color.new(color.gray, 15), frame_width=1)
+
+    string tfm = timeframe.in_seconds() / 60 <= 1 ? "SCALP" : timeframe.in_seconds() / 60 <= 15 ? "ENTRY" : timeframe.in_seconds() / 60 <= 60 ? "SWING" : "BIAS"
+    table.cell(d, 0, 0, "⬡ XAUUSD  " + tfm, text_color=color.white, text_size=size.normal, bgcolor=color.new(color.navy, 15), text_halign=text.align_left)
+    table.cell(d, 1, 0, timeframe.period + "M", text_color=color.silver, text_size=size.normal, bgcolor=color.new(color.navy, 15), text_halign=text.align_center)
+
+    string htf_s = htf_bull ? "▲ HTF Bull" : htf_bear ? "▼ HTF Bear" : "── Neutral"
+    color  htf_c = htf_bull ? color.lime   : htf_bear ? color.red   : color.gray
+    table.cell(d, 0, 1, "HTF Bias", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+    table.cell(d, 1, 1, htf_s,      text_color=htf_c,        text_size=size.small, text_halign=text.align_center)
+
+    string ms_s = ms_bull ? "▲ Bullish" : ms_bear ? "▼ Bearish" : "── Range"
+    color  ms_c = ms_bull ? color.lime  : ms_bear ? color.red   : color.gray
+    table.cell(d, 0, 2, "Structure", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+    table.cell(d, 1, 2, ms_s,        text_color=ms_c,         text_size=size.small, text_halign=text.align_center)
+
+    string pd_s = in_prem ? "▲ Premium" : in_disc ? "▼ Discount" : "── Eq"
+    color  pd_c = in_prem ? color.red   : in_disc ? color.lime  : color.gray
+    table.cell(d, 0, 3, "Zone",  text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+    table.cell(d, 1, 3, pd_s,    text_color=pd_c,         text_size=size.small, text_halign=text.align_center)
+
+    bool   np = not na(poc) and math.abs(close - poc) < atr14 * 1.0
+    bool   av = not na(vah) and close > vah
+    bool   bv = not na(val) and close < val
+    string vp_s = np ? "@ POC " + str.tostring(math.round(poc, 1)) : av ? "Above VAH" : bv ? "Below VAL" : "In VA"
+    color  vp_c = np ? color.orange : av ? color.lime : bv ? color.red : color.gray
+    table.cell(d, 0, 4, "FRVP",  text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+    table.cell(d, 1, 4, vp_s,    text_color=vp_c,         text_size=size.small, text_halign=text.align_center)
+
+    string ob_s = near_bull_ob ? "@ Bull OB" : near_bear_ob ? "@ Bear OB" : str.tostring(array.size(ob_bx)) + " Active"
+    color  ob_c = near_bull_ob ? color.teal  : near_bear_ob ? color.red   : color.gray
+    table.cell(d, 0, 5, "OB/FVG", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+    table.cell(d, 1, 5, ob_s,     text_color=ob_c,          text_size=size.small, text_halign=text.align_center)
+
+    string macd_s = macd_bull ? "▲ Bull" : macd_bear ? "▼ Bear" : "──"
+    color  macd_c = macd_bull ? color.lime : macd_bear ? color.red : color.gray
+    table.cell(d, 0, 6, "MACD 5/13/4", text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+    table.cell(d, 1, 6, macd_s,         text_color=macd_c,       text_size=size.small, text_halign=text.align_center)
+
+    string sig_s = zone_buy ? "◆ BUY Zone" : zone_sell ? "◆ SELL Zone" : "── WAIT"
+    color  sig_c = zone_buy ? color.lime   : zone_sell ? color.red     : color.gray
+    color  sig_b = zone_buy ? color.new(color.green, 55) : zone_sell ? color.new(color.red, 55) : color.new(color.black, 20)
+    table.cell(d, 0, 7, "Signal",  text_color=color.silver, text_size=size.small,  text_halign=text.align_left)
+    table.cell(d, 1, 7, sig_s,     text_color=sig_c,        text_size=size.large,  bgcolor=sig_b, text_halign=text.align_center)
+
+// ═══════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════
+if zone_buy  and barstate.isconfirmed
+    alert("◆ SMC BUY Zone | HTF+Structure+Discount+Golden+OB/FVG+MACD | " + str.tostring(close), alert.freq_once_per_bar_close)
+if zone_sell and barstate.isconfirmed
+    alert("◆ SMC SELL Zone | HTF+Structure+Premium+Golden+OB/FVG+MACD | " + str.tostring(close), alert.freq_once_per_bar_close)
